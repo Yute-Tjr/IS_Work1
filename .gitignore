@@ -1,0 +1,17 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local data and secrets
+instance/
+*.db
+.env
+
+# Generated scan reports
+reports/
+odc-reports/
+
+# OS
+.DS_Store

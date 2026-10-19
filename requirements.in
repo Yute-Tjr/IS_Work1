@@ -1,0 +1,6 @@
+# Direct runtime dependencies (compiled to requirements.txt with `uv pip compile`)
+flask
+flask-sqlalchemy
+flask-limiter
+pyjwt
+bcrypt

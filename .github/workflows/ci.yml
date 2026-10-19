@@ -1,0 +1,136 @@
+name: CI
+
+# Runs automatically on every push and every pull request
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  tests:
+    name: Unit tests (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - run: pytest -v
+
+  sast:
+    name: SAST (Bandit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+
+      - name: Generate Bandit reports
+        run: |
+          mkdir -p reports
+          bandit -r app -f html -o reports/bandit-report.html --exit-zero
+          bandit -r app -f json -o reports/bandit-report.json --exit-zero
+          {
+            echo "## Bandit SAST report"
+            echo '```'
+            bandit -r app -f txt --exit-zero
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Bandit reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bandit-report
+          path: reports/
+
+      - name: Fail on medium or high severity issues
+        run: bandit -r app --severity-level medium --confidence-level medium
+
+  sca-pip-audit:
+    name: SCA (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+
+      - name: Generate pip-audit reports
+        run: |
+          mkdir -p reports
+          pip-audit -r requirements.txt -f json -o reports/pip-audit-report.json || true
+          {
+            echo "## pip-audit SCA report (requirements.txt)"
+            pip-audit -r requirements.txt -f markdown --desc on || true
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload pip-audit report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pip-audit-report
+          path: reports/
+
+      - name: Fail on known vulnerable dependencies
+        run: pip-audit -r requirements.txt --desc on
+
+  sca-dependency-check:
+    name: SCA (OWASP Dependency-Check)
+    runs-on: ubuntu-latest
+    env:
+      # Free key from https://nvd.nist.gov/developers/request-an-api-key,
+      # stored in Settings -> Secrets and variables -> Actions as NVD_API_KEY
+      NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Skip notice
+        if: env.NVD_API_KEY == ''
+        run: echo "::warning::NVD_API_KEY secret is not set, so OWASP Dependency-Check was skipped."
+
+      - name: Restore NVD database cache
+        if: env.NVD_API_KEY != ''
+        uses: actions/cache@v6
+        with:
+          path: ~/dependency-check-data
+          key: dependency-check-data-${{ github.run_id }}
+          restore-keys: dependency-check-data-
+
+      - name: Run OWASP Dependency-Check
+        if: env.NVD_API_KEY != ''
+        run: |
+          mkdir -p ~/dependency-check-data reports
+          docker run --rm \
+            -u "$(id -u):$(id -g)" \
+            -v "$GITHUB_WORKSPACE":/src:ro \
+            -v "$HOME/dependency-check-data":/usr/share/dependency-check/data \
+            -v "$GITHUB_WORKSPACE/reports":/report \
+            owasp/dependency-check:latest \
+            --scan /src/requirements.txt \
+            --project "secure-notes-api" \
+            --enableExperimental \
+            --disableOssIndex \
+            --nvdApiKey "$NVD_API_KEY" \
+            --format HTML --format JSON \
+            --out /report
+
+      - name: Upload Dependency-Check report
+        if: always() && env.NVD_API_KEY != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: dependency-check-report
+          path: reports/
