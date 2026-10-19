@@ -1,5 +1,7 @@
 # Secure Notes API
 
+[![CI](https://github.com/Yute-Tjr/IS_Work1/actions/workflows/ci.yml/badge.svg)](https://github.com/Yute-Tjr/IS_Work1/actions/workflows/ci.yml)
+
 Laboratory Work 1, Information Security (HDU): *Secure REST API Development with CI/CD and Real CVE Vulnerability Analysis*.
 
 A small REST API written in **Python / Flask**. Authenticated users can publish and read short notes ("posts"). The project is built to defend against the OWASP Top 10 categories covered in the lab:
@@ -255,11 +257,24 @@ Without the secret, the job is skipped with a warning and the other scanners sti
 > - `docs/screenshots/pip-audit.png`: pip-audit summary, "No known vulnerabilities found"
 > - `docs/screenshots/dependency-check.png`: Dependency-Check HTML report
 >
-> Link to the last successful pipeline run: TODO
+Successful pipeline runs: <https://github.com/Yute-Tjr/IS_Work1/actions/workflows/ci.yml?query=is%3Asuccess>
 
 ### API test results (curl)
 
-> TODO: add a screenshot of `./scripts/demo.sh`, showing `401` without a token, `401` for a forged token, `200` with a valid token, the escaped XSS payload and the SQL injection search returning 0 results.
+Output of `./scripts/demo.sh` against the running server.
+
+**Steps 1–5: authentication and rejected requests.**
+- Registration succeeds with `201`.
+- A wrong password, an SQL injection in the username, a request without a token and a forged `alg: none` token are all rejected with `401`.
+
+![curl demo, steps 1-5](docs/screenshots/demo-1.png)
+
+**Steps 6–10: authorized access.**
+- Login returns a JWT. With the token, creating posts returns `201` and reading data returns `200`.
+- The XSS payload is returned HTML-escaped (`&lt;script&gt;`).
+- The SQL injection search is treated as plain text and returns `"count":0`.
+
+![curl demo, steps 6-10](docs/screenshots/demo-2.png)
 
 ---
 
