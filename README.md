@@ -19,7 +19,7 @@ Every push and pull request runs the test suite, a SAST scan and an SCA scan in 
 | Authentication | JWT (PyJWT, HS256) and bcrypt password hashing |
 | Brute-force protection | Flask-Limiter |
 | Tests | pytest (28 tests) |
-| CI/CD | GitHub Actions with Bandit (SAST) and pip-audit (SCA) |
+| CI/CD | GitHub Actions with Bandit (SAST), Snyk and pip-audit (SCA) |
 
 ---
 
@@ -225,18 +225,28 @@ Tests in `tests/test_auth.py` and `tests/test_api.py` cover this:
 
 ## 5. CI/CD pipeline
 
-`.github/workflows/ci.yml` runs on **every push, every pull request** and on manual dispatch. It has three parallel jobs:
+`.github/workflows/ci.yml` runs on **every push, every pull request** and on manual dispatch. It has four parallel jobs:
 
 | Job | Type | Tool | Fails the build when |
 |---|---|---|---|
 | Unit tests | Tests | pytest | any test fails |
 | SAST (Bandit) | Static code analysis | [Bandit](https://bandit.readthedocs.io/) | an issue of medium or high severity is found in `app/` |
 | SCA (pip-audit) | Dependency vulnerabilities | [pip-audit](https://github.com/pypa/pip-audit) (PyPI / OSV advisory database) | any dependency has a known vulnerability |
+| SCA (Snyk) | Dependency vulnerabilities | [Snyk Open Source](https://snyk.io/product/open-source-security-management/) (Snyk vulnerability database) | any dependency has a known vulnerability |
 
 **Reports.** Each scan writes a summary to the run page, under *Summary*. It also uploads full reports as artifacts:
 
 - `bandit-report`: HTML and JSON
 - `pip-audit-report`: JSON
+- `snyk-report`: HTML, JSON and the CLI text output
+
+**Snyk setup.** The Snyk CLI needs a token from a (free) Snyk account.
+
+1. Sign up at <https://app.snyk.io>.
+2. Create a personal access token at <https://app.snyk.io/account/personal-access-tokens>.
+3. Add it in *Settings → Secrets and variables → Actions* as `SNYK_TOKEN`.
+
+Without the secret, the Snyk job is skipped with a warning and the other scanners still run. pip-audit is a second, independent SCA check: it uses the PyPI/OSV advisory data, while Snyk uses its own vulnerability database.
 
 **Bandit false positive.** Bandit's B106 check flagged `token_type="Bearer"` in `app/auth.py` as a possible hard-coded password. `"Bearer"` is the token type name defined in RFC 6750, not a secret. The line is marked `# nosec B106` with a comment that explains why.
 
@@ -246,6 +256,7 @@ Tests in `tests/test_auth.py` and `tests/test_api.py` cover this:
 > - `docs/screenshots/ci-pipeline.png`: all jobs green on the Actions page
 > - `docs/screenshots/bandit.png`: Bandit summary, "No issues identified"
 > - `docs/screenshots/pip-audit.png`: pip-audit summary, "No known vulnerabilities found"
+> - `docs/screenshots/snyk.png`: Snyk summary, no vulnerable paths found
 >
 Successful pipeline runs: <https://github.com/Yute-Tjr/IS_Work1/actions/workflows/ci.yml?query=is%3Asuccess>
 

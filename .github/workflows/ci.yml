@@ -88,3 +88,65 @@ jobs:
 
       - name: Fail on known vulnerable dependencies
         run: pip-audit -r requirements.txt --desc on
+
+  sca-snyk:
+    name: SCA (Snyk)
+    runs-on: ubuntu-latest
+    env:
+      # Free personal access token from https://app.snyk.io/account/personal-access-tokens,
+      # stored in Settings -> Secrets and variables -> Actions as SNYK_TOKEN
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Skip notice
+        if: env.SNYK_TOKEN == ''
+        run: echo "::warning::SNYK_TOKEN secret is not set, so the Snyk scan was skipped."
+
+      - uses: actions/setup-python@v7
+        if: env.SNYK_TOKEN != ''
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      # Snyk resolves the dependency tree from the packages installed in the environment
+      - name: Install dependencies
+        if: env.SNYK_TOKEN != ''
+        run: pip install -r requirements.txt
+
+      - uses: snyk/actions/setup@v1
+        if: env.SNYK_TOKEN != ''
+
+      - name: Run Snyk dependency scan
+        id: snyk
+        if: env.SNYK_TOKEN != ''
+        run: |
+          mkdir -p reports
+          set +e
+          snyk test --file=requirements.txt --package-manager=pip \
+            --json-file-output=reports/snyk-report.json | tee reports/snyk-output.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Snyk SCA report (requirements.txt)"
+            echo '```'
+            cat reports/snyk-output.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          npx --yes snyk-to-html@3 -i reports/snyk-report.json -o reports/snyk-report.html
+
+      - name: Upload Snyk report
+        if: always() && env.SNYK_TOKEN != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: snyk-report
+          path: reports/
+
+      # snyk test exit codes: 0 = no issues, 1 = vulnerabilities found, 2+ = scan error
+      - name: Fail on known vulnerable dependencies
+        if: env.SNYK_TOKEN != ''
+        run: |
+          case "${{ steps.snyk.outputs.exit_code }}" in
+            0) echo "Snyk: no known vulnerabilities found" ;;
+            1) echo "::error::Snyk found vulnerable dependencies"; exit 1 ;;
+            *) echo "::error::Snyk scan failed (exit code ${{ steps.snyk.outputs.exit_code }})"; exit 1 ;;
+          esac
