@@ -252,13 +252,21 @@ Without the secret, the Snyk job is skipped with a warning and the other scanner
 
 ### Scan results
 
-> TODO: add screenshots after the first pipeline run on GitHub
-> - `docs/screenshots/ci-pipeline.png`: all jobs green on the Actions page
-> - `docs/screenshots/bandit.png`: Bandit summary, "No issues identified"
-> - `docs/screenshots/pip-audit.png`: pip-audit summary, "No known vulnerabilities found"
-> - `docs/screenshots/snyk.png`: Snyk summary, no vulnerable paths found
->
-Successful pipeline runs: <https://github.com/Yute-Tjr/IS_Work1/actions/workflows/ci.yml?query=is%3Asuccess>
+Last successful pipeline run: [CI #4](https://github.com/Yute-Tjr/IS_Work1/actions/runs/39197317961) (all successful runs: <https://github.com/Yute-Tjr/IS_Work1/actions/workflows/ci.yml?query=is%3Asuccess>).
+
+**Pipeline overview.** All four jobs passed: unit tests, Bandit, pip-audit and Snyk.
+
+![CI pipeline run](docs/screenshots/ci-pipeline.png)
+
+**SAST: Bandit.** No issues identified in 302 lines of code. The one `# nosec B106` false positive is explained above.
+
+![Bandit SAST report](docs/screenshots/bandit.png)
+
+**SCA: pip-audit and Snyk.**
+- pip-audit reports "No known vulnerabilities found".
+- Snyk tested 18 dependencies and found no vulnerable paths.
+
+![pip-audit and Snyk SCA reports](docs/screenshots/sca-reports.png)
 
 ### API test results (curl)
 
