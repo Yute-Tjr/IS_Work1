@@ -75,7 +75,8 @@ jobs:
           pip-audit -r requirements.txt -f json -o reports/pip-audit-report.json || true
           {
             echo "## pip-audit SCA report (requirements.txt)"
-            pip-audit -r requirements.txt -f markdown --desc on || true
+            # 2>&1: the "No known vulnerabilities found" message is printed on stderr
+            pip-audit -r requirements.txt -f markdown --desc on --progress-spinner off 2>&1 || true
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload pip-audit report
