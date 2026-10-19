@@ -126,6 +126,8 @@ jobs:
           snyk test --file=requirements.txt --package-manager=pip \
             --json-file-output=reports/snyk-report.json | tee reports/snyk-output.txt
           echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          # Strip terminal colour codes so the job summary renders as plain text
+          sed -i 's/\x1b\[[0-9;]*m//g' reports/snyk-output.txt
           {
             echo "## Snyk SCA report (requirements.txt)"
             echo '```'
