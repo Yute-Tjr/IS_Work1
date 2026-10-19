@@ -7,7 +7,11 @@ __pycache__/
 # Local data and secrets
 instance/
 *.db
+*.sqlite
 .env
+
+# IDE
+.idea/
 
 # Generated scan reports
 reports/
