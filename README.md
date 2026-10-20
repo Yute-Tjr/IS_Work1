@@ -415,9 +415,3 @@ override the route's access flag, so authentication is enforced and nothing is
 leaked, while the site keeps working (**regression test passed**).
 
 ![After the fix — both exploits return HTTP 401 Forbidden and the site still works](docs/screenshots/cve-fixed.png)
-
-### References
-
-- NVD — CVE-2023-23752: <https://nvd.nist.gov/vuln/detail/CVE-2023-23752>
-- Joomla security advisory: <https://developer.joomla.org/security-centre/894-20230201-core-improper-access-check-in-webservice-endpoints.html>
-- Vulhub: <https://github.com/vulhub/vulhub/tree/master/joomla/CVE-2023-23752>
